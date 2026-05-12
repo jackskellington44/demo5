@@ -86,8 +86,12 @@ const NONE_CATEGORY_FILTER = '__NONE__';
 let activePostForModal = null;
 
 // Double right-click detection
+// Trackpads (especially on macOS) produce contextmenu events more slowly than
+// a physical mouse, so we use a longer window on Mac/trackpad platforms.
 let lastRightClick = 0;
-const DOUBLE_CLICK_THRESHOLD = 400; // ms
+const _isMac = /Mac|iPhone|iPod|iPad/.test(navigator.platform) ||
+               (navigator.userAgentData?.platform === 'macOS');
+const DOUBLE_CLICK_THRESHOLD = _isMac ? 650 : 450; // ms
 
 // Cache last loaded data for re-rendering link lines on pan/zoom/move
 let lastLoadedPosts = [];
@@ -2713,13 +2717,24 @@ function initializeEventListeners() {
   });
 
   // Right-click: single = open/close form, double = toggle edit mode
-    (canvasViewport || mainPageContainer).addEventListener('contextmenu', (e) => {
+  // We track timing via pointerdown (button 2) rather than contextmenu because
+  // on macOS trackpads the contextmenu event is delayed by OS gesture recognition,
+  // making the gap between two right-clicks appear larger than it really is.
+  let _lastRightPointerDown = 0;
+  (canvasViewport || mainPageContainer).addEventListener('pointerdown', (e) => {
+    if (e.button === 2) _lastRightPointerDown = Date.now();
+  });
+
+  (canvasViewport || mainPageContainer).addEventListener('contextmenu', (e) => {
     e.preventDefault();
     if (isPlacing) return;
 
     const now = Date.now();
-    const timeSince = now - lastRightClick;
-    lastRightClick = now;
+    // Prefer the pointerdown timestamp when it's recent (within 1 s), since it's
+    // more accurate on trackpads than the contextmenu event timestamp.
+    const pressTime = (now - _lastRightPointerDown < 1000) ? _lastRightPointerDown : now;
+    const timeSince = pressTime - lastRightClick;
+    lastRightClick = pressTime;
 
     const isFormOpen = postFormOverlay.style.display === 'flex';
 
@@ -2735,7 +2750,7 @@ function initializeEventListeners() {
     pendingLinkPostId = clickedCard ? clickedCard.dataset.postId : null;
 
     setTimeout(() => {
-      if (lastRightClick !== now) return;
+      if (lastRightClick !== pressTime) return;
 
       if (isFormOpen) {
         closePostForm();
